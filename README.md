@@ -176,6 +176,3 @@ memocry.py
 
 ---
 
-## Changelog
-
-See `v0_1.3` for the latest release notes.
