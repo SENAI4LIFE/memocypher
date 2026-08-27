@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .. import __version__
+from ..errors import CollisionError, MemocypherError
 from ..fsops import CollisionPolicy
 from ..keys import KeyRef, generate_keyfile
 from .theme import LG, MD, SM, XS, Theme
@@ -196,25 +197,25 @@ def generate_key_dialog(
             messagebox.showerror("Key file", "That location is not a folder.", parent=dlg)
             return
         target = location / name
+        label = label_var.get().strip()
         try:
-            dlg.result = generate_keyfile(target, label=label_var.get().strip())
-        except Exception as exc:  # noqa: BLE001
-            if target.with_name(
-                target.name
-                if target.suffix == ".mckey"
-                else target.name + ".mckey"
-            ).exists() and messagebox.askyesno(
+            dlg.result = generate_keyfile(target, label=label)
+        except CollisionError:
+            if not messagebox.askyesno(
                 "Key file",
                 "A key file with that name already exists. Overwrite it?\n\n"
                 "Files encrypted with the old key will no longer open.",
                 parent=dlg,
             ):
-                dlg.result = generate_keyfile(
-                    target, label=label_var.get().strip(), overwrite=True
-                )
-            else:
+                return
+            try:
+                dlg.result = generate_keyfile(target, label=label, overwrite=True)
+            except MemocypherError as exc:
                 messagebox.showerror("Key file", str(exc), parent=dlg)
                 return
+        except MemocypherError as exc:
+            messagebox.showerror("Key file", str(exc), parent=dlg)
+            return
         dlg.destroy()
 
     ttk.Button(buttons, text="Cancel", style="Ghost.TButton", command=dlg._cancel).pack(
@@ -271,7 +272,6 @@ def show_about(parent: tk.Misc, theme: Theme) -> None:
         "About memocypher",
         f"memocypher {__version__}\n\n"
         "Authenticated file encryption using AES-256-GCM in a streaming\n"
-        "construction, with scrypt passphrases or 256-bit key files.\n\n"
-        "MIT licensed.",
+        "construction, with scrypt passphrases or 256-bit key files.",
         parent=parent,
     )

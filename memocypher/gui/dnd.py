@@ -1,9 +1,9 @@
 """Optional drag-and-drop support via tkinterdnd2.
 
-If the package is not installed the app still works: :func:`make_root` returns a
-plain ``tk.Tk`` and :func:`register_drop_target` becomes a no-op, so callers do
-not need to branch. :data:`AVAILABLE` tells the UI whether to show the "drop
-files here" affordance or a "click to browse" hint instead.
+If the package is not installed the app still works: :func:`base_tk_class`
+returns plain ``tk.Tk`` and :func:`register_drop_target` becomes a no-op, so
+callers do not need to branch. :data:`AVAILABLE` says whether drag-and-drop is
+active.
 """
 
 from __future__ import annotations
@@ -27,10 +27,6 @@ def base_tk_class() -> type:
     if AVAILABLE:  # pragma: no cover
         return TkinterDnD.Tk
     return tk.Tk
-
-
-def make_root() -> tk.Tk:
-    return base_tk_class()()
 
 
 def register_drop_target(widget: tk.Misc, on_drop: Callable[[list[str]], None]) -> bool:

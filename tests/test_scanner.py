@@ -19,7 +19,7 @@ def test_scan_buckets(sample_tree, keyfile_credential):
     assert "fam.mckey" not in names(ws.plaintext)
     assert "fam.mckey" in names(ws.keyfiles)
     assert "sub" in names(ws.folders)
-    assert "inner.md" in names(ws.plaintext)  # recursive by default
+    assert "inner.md" in names(ws.plaintext)
 
 
 def test_scan_non_recursive(sample_tree):

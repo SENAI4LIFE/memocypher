@@ -20,11 +20,9 @@ class FileEntry:
     path: Path
     size: int
     modified: float
-    kind: str  # "plaintext" | "encrypted" | "keyfile" | "folder"
-    # populated for encrypted entries
+    kind: str
     container: ContainerHeader | None = None
     container_error: str = ""
-    # populated for folder entries
     child_count: int = 0
 
     @property
@@ -57,10 +55,6 @@ class Workspace:
     folders: list[FileEntry] = field(default_factory=list)
     key_refs: list[KeyRef] = field(default_factory=list)
     truncated: bool = False
-
-    @property
-    def all_entries(self) -> list[FileEntry]:
-        return [*self.folders, *self.plaintext, *self.encrypted, *self.keyfiles]
 
     def key_ref_for(self, entry: FileEntry) -> list[KeyRef]:
         if entry.kind != "encrypted" or not entry.key_id:

@@ -12,19 +12,22 @@ from __future__ import annotations
 
 import enum
 import queue
+import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import crypto, fsops
+from . import archive, crypto, fsops
 from .crypto import Credential
-from .errors import CancelledError, MemocypherError
+from .errors import CancelledError, CollisionError, MemocypherError
 
 
 class JobKind(str, enum.Enum):
     ENCRYPT = "encrypt"
+    ENCRYPT_ARCHIVE = "encrypt-archive"
     DECRYPT = "decrypt"
     DECRYPT_LEGACY = "decrypt-legacy"
 
@@ -63,6 +66,7 @@ class ItemResult:
 class Skipped:
     path: Path
     reason: str
+    collision: bool = False
 
 
 @dataclass
@@ -95,9 +99,6 @@ class BatchSummary:
         return self.failed_count == 0 and not self.cancelled
 
 
-# --------------------------------------------------------------------------- #
-# Events
-# --------------------------------------------------------------------------- #
 @dataclass
 class BatchStarted:
     total: int
@@ -129,13 +130,10 @@ class BatchFinished:
     summary: BatchSummary
 
 
-Event = object
+Event = BatchStarted | ItemStarted | ItemProgress | ItemFinished | BatchFinished
 EventFn = Callable[[Event], None]
 
 
-# --------------------------------------------------------------------------- #
-# Planning
-# --------------------------------------------------------------------------- #
 def plan_encrypt(
     sources: Iterable[Path],
     credential: Credential,
@@ -144,33 +142,59 @@ def plan_encrypt(
     collision: fsops.CollisionPolicy = fsops.CollisionPolicy.ERROR,
     delete_source: bool = False,
 ) -> tuple[list[Job], list[Skipped]]:
+    """Turn files and directories into encrypt jobs.
+
+    A file becomes ``name.mcz``. A directory becomes a single
+    ``name.zip.mcz`` archive job (the CLI's ``-r`` flag expands the directory
+    to individual files before it gets here).
+    """
+
     jobs: list[Job] = []
     skipped: list[Skipped] = []
     planned_outputs: set[Path] = set()
     for raw in sources:
         src = Path(raw)
+        is_dir = src.is_dir()
         try:
-            src = fsops.validate_source_file(src)
+            src = fsops.validate_source_dir(src) if is_dir else fsops.validate_source_file(src)
         except MemocypherError as exc:
             skipped.append(Skipped(src, str(exc)))
             continue
+
         target_dir = Path(out_dir).expanduser().resolve() if out_dir else src.parent
-        desired = target_dir / fsops.encrypted_name(src)
+        if is_dir:
+            desired = target_dir / f"{src.name}.zip{fsops.CONTAINER_SUFFIX}"
+        else:
+            desired = target_dir / fsops.encrypted_name(src)
+
         final = _resolve(desired, collision, planned_outputs, skipped, src)
         if final is None:
             continue
         planned_outputs.add(final)
         jobs.append(
             Job(
-                kind=JobKind.ENCRYPT,
+                kind=JobKind.ENCRYPT_ARCHIVE if is_dir else JobKind.ENCRYPT,
                 src=src,
                 dst=final,
                 credential=credential,
-                delete_source=delete_source,
-                total_bytes=src.stat().st_size,
+                delete_source=delete_source and not is_dir,
+                total_bytes=_tree_size(src) if is_dir else src.stat().st_size,
             )
         )
     return jobs, skipped
+
+
+def _tree_size(folder: Path, *, cap: int = 200_000) -> int:
+    total = 0
+    for i, path in enumerate(folder.rglob("*")):
+        if i >= cap:
+            break
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
 
 
 def plan_decrypt(
@@ -227,7 +251,7 @@ def plan_decrypt(
         else:
             if legacy_key is None:
                 skipped.append(
-                    Skipped(src, "looks like a legacy memocry file; needs a legacy .key")
+                    Skipped(src, "legacy whole-file .enc container; pass a legacy .key")
                 )
                 continue
             final = _resolve(desired, collision, planned_outputs, skipped, src)
@@ -259,31 +283,24 @@ def _resolve(
     def taken(path: Path) -> bool:
         return path.exists() or path in planned_outputs
 
-    if not taken(desired):
-        return desired
-
-    if policy is fsops.CollisionPolicy.SKIP:
-        skipped.append(Skipped(src, f"skipped, output exists: {desired.name}"))
+    if desired in planned_outputs and policy is not fsops.CollisionPolicy.RENAME:
+        skipped.append(
+            Skipped(src, f"another file already targets {desired.name}", collision=True)
+        )
         return None
-    if policy is fsops.CollisionPolicy.ERROR:
-        skipped.append(Skipped(src, f"output already exists: {desired.name}"))
-        return None
-    if policy is fsops.CollisionPolicy.OVERWRITE:
-        if desired in planned_outputs:
-            skipped.append(Skipped(src, f"another file already targets {desired.name}"))
-            return None
-        return desired  # exists on disk only; caller opted in to overwriting
 
     try:
-        return fsops.first_free_name(desired, taken)
-    except MemocypherError:
-        skipped.append(Skipped(src, "could not find a free output name"))
+        resolved = fsops.resolve_collision(desired, policy, taken=taken)
+    except MemocypherError as exc:
+        collision = isinstance(exc, CollisionError)
+        reason = f"output already exists: {desired.name}" if collision else str(exc)
+        skipped.append(Skipped(src, reason, collision=collision))
         return None
+    if resolved is None:
+        skipped.append(Skipped(src, f"skipped, output exists: {desired.name}", collision=True))
+    return resolved
 
 
-# --------------------------------------------------------------------------- #
-# Execution
-# --------------------------------------------------------------------------- #
 def run(
     jobs: list[Job],
     *,
@@ -299,46 +316,16 @@ def run(
     stop = False
     for index, job in enumerate(jobs):
         if stop or (cancel_check and cancel_check()):
-            summary.results.append(ItemResult(job, ItemStatus.CANCELLED, "cancelled"))
+            result = ItemResult(job, ItemStatus.CANCELLED, "cancelled")
+            summary.results.append(result)
             summary.cancelled = True
+            emit(ItemFinished(index, job, result))
             continue
         emit(ItemStarted(index, job))
-        item_started = time.perf_counter()
-
-        def progress(done: int, _job=job, _index=index) -> None:
-            emit(
-                ItemProgress(
-                    _index, _job, min(done, _job.total_bytes or done), _job.total_bytes
-                )
-            )
-
-        try:
-            _execute(job, progress, cancel_check)
-            result = ItemResult(
-                job, ItemStatus.OK, elapsed=time.perf_counter() - item_started
-            )
-            if job.delete_source:
-                try:
-                    fsops.delete_file(job.src)
-                except OSError as exc:
-                    result = ItemResult(
-                        job,
-                        ItemStatus.OK,
-                        message=f"decrypted, but could not delete source: {exc}",
-                        elapsed=time.perf_counter() - item_started,
-                    )
-        except CancelledError:
-            _cleanup_partial(job.dst)
-            result = ItemResult(job, ItemStatus.CANCELLED, "cancelled")
+        result = _run_one(job, index, emit, cancel_check)
+        if result.status is ItemStatus.CANCELLED:
             summary.cancelled = True
             stop = True
-        except MemocypherError as exc:
-            result = ItemResult(job, ItemStatus.FAILED, str(exc))
-        except OSError as exc:
-            result = ItemResult(job, ItemStatus.FAILED, f"filesystem error: {exc}")
-        except Exception as exc:  # noqa: BLE001 - last-resort guard for the batch
-            result = ItemResult(job, ItemStatus.FAILED, f"unexpected error: {exc!r}")
-
         summary.results.append(result)
         emit(ItemFinished(index, job, result))
 
@@ -347,10 +334,40 @@ def run(
     return summary
 
 
+def _run_one(job: Job, index: int, emit: EventFn, cancel_check) -> ItemResult:
+    started = time.perf_counter()
+
+    def progress(done: int) -> None:
+        emit(ItemProgress(index, job, min(done, job.total_bytes or done), job.total_bytes))
+
+    try:
+        _execute(job, progress, cancel_check)
+    except CancelledError:
+        return ItemResult(job, ItemStatus.CANCELLED, "cancelled")
+    except MemocypherError as exc:
+        return ItemResult(job, ItemStatus.FAILED, str(exc))
+    except OSError as exc:
+        return ItemResult(job, ItemStatus.FAILED, f"filesystem error: {exc}")
+    except Exception as exc:  # noqa: BLE001 - last-resort guard for the batch
+        return ItemResult(job, ItemStatus.FAILED, f"unexpected error: {exc!r}")
+
+    elapsed = time.perf_counter() - started
+    if job.delete_source:
+        try:
+            fsops.delete_file(job.src)
+        except OSError as exc:
+            return ItemResult(
+                job, ItemStatus.OK, f"done, but could not delete source: {exc}", elapsed
+            )
+    return ItemResult(job, ItemStatus.OK, elapsed=elapsed)
+
+
 def _execute(job: Job, progress, cancel_check) -> None:
     cancel = cancel_check if cancel_check else None
     if job.kind is JobKind.ENCRYPT:
         crypto.encrypt_file(job.src, job.dst, job.credential, progress=progress, cancel=cancel)
+    elif job.kind is JobKind.ENCRYPT_ARCHIVE:
+        _execute_archive(job, progress, cancel)
     elif job.kind is JobKind.DECRYPT:
         crypto.decrypt_file(job.src, job.dst, job.credential, progress=progress, cancel=cancel)
     elif job.kind is JobKind.DECRYPT_LEGACY:
@@ -359,15 +376,21 @@ def _execute(job: Job, progress, cancel_check) -> None:
         raise MemocypherError(f"Unknown job kind: {job.kind}")
 
 
-def _cleanup_partial(dst: Path) -> None:
-    # atomic_writer already removes its temp file; nothing to do, but keep the
-    # hook so a future non-atomic path has somewhere to clean up.
-    return None
+def _execute_archive(job: Job, progress, cancel) -> None:
+    """Zip the folder into a private temp file, encrypt it, then delete the zip."""
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="memocypher-arc-"))
+    try:
+        zip_path = tmp_dir / f"{job.src.name}.zip"
+        archive.zip_directory(job.src, zip_path, cancel=cancel)
+        if cancel is not None and cancel():
+            raise CancelledError("Operation cancelled.")
+        job.total_bytes = zip_path.stat().st_size
+        crypto.encrypt_file(zip_path, job.dst, job.credential, progress=progress, cancel=cancel)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-# --------------------------------------------------------------------------- #
-# Threaded wrapper
-# --------------------------------------------------------------------------- #
 class BatchRunner:
     """Run a batch on a worker thread, delivering events through a queue."""
 

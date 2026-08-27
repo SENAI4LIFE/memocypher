@@ -128,8 +128,3 @@ class Toast:
         if self._label is not None:
             self._label.destroy()
             self._label = None
-
-
-def hline(parent: tk.Misc, theme: Theme) -> tk.Frame:
-    line = tk.Frame(parent, bg=theme.c("border"), height=1)
-    return line

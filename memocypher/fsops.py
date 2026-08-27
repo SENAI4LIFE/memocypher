@@ -16,12 +16,13 @@ from __future__ import annotations
 import contextlib
 import enum
 import os
-import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from .errors import CollisionError, MemocypherError
+
+TakenFn = Callable[[Path], bool]
 
 CONTAINER_SUFFIX = ".mcz"
 KEYFILE_SUFFIX = ".mckey"
@@ -36,9 +37,6 @@ class CollisionPolicy(str, enum.Enum):
     SKIP = "skip"
 
 
-# --------------------------------------------------------------------------- #
-# Atomic writing
-# --------------------------------------------------------------------------- #
 @contextlib.contextmanager
 def atomic_writer(
     path: Path, *, mode: int | None = None, overwrite: bool = True
@@ -73,13 +71,21 @@ def atomic_writer(
 
 
 class _AtomicFile:
-    """Thin wrapper that also fsyncs on request."""
+    """Binary file proxy that also knows how to fsync itself.
+
+    Every unknown attribute (``seek``, ``tell``, ``seekable`` ...) is delegated
+    to the wrapped handle, so the object can be handed to anything that expects
+    a real file - ``zipfile.ZipFile`` included.
+    """
 
     def __init__(self, fh):
         self._fh = fh
 
     def write(self, data) -> int:
         return self._fh.write(data)
+
+    def __getattr__(self, name):
+        return getattr(self._fh, name)
 
     def flush_and_sync(self) -> None:
         self._fh.flush()
@@ -102,17 +108,21 @@ def _fsync_dir(directory: Path) -> None:
             os.close(fd)
 
 
-# --------------------------------------------------------------------------- #
-# Collision resolution
-# --------------------------------------------------------------------------- #
-def resolve_collision(path: Path, policy: CollisionPolicy) -> Path | None:
+def resolve_collision(
+    path: Path, policy: CollisionPolicy, *, taken: TakenFn | None = None
+) -> Path | None:
     """Return the path to write, or ``None`` when the policy says to skip.
+
+    ``taken`` decides whether a candidate name is unavailable; it defaults to
+    "exists on disk". Callers that also need to avoid names claimed earlier in
+    the same batch pass their own predicate.
 
     Raises :class:`CollisionError` for :data:`CollisionPolicy.ERROR`.
     """
 
     path = Path(path)
-    if not path.exists():
+    is_taken: TakenFn = taken or (lambda p: p.exists())
+    if not is_taken(path):
         return path
     if policy is CollisionPolicy.OVERWRITE:
         return path
@@ -121,7 +131,7 @@ def resolve_collision(path: Path, policy: CollisionPolicy) -> Path | None:
     if policy is CollisionPolicy.ERROR:
         raise CollisionError(path)
     if policy is CollisionPolicy.RENAME:
-        return first_free_name(path, lambda p: p.exists())
+        return first_free_name(path, is_taken)
     raise MemocypherError(f"Unknown collision policy: {policy!r}")
 
 
@@ -137,7 +147,7 @@ def iter_name_candidates(path: Path) -> Iterator[Path]:
         counter += 1
 
 
-def first_free_name(path: Path, taken: Callable[[Path], bool], *, limit: int = 10_000) -> Path:
+def first_free_name(path: Path, taken: TakenFn, *, limit: int = 10_000) -> Path:
     """Return the first candidate name for which ``taken`` is False."""
 
     for offset, candidate in enumerate(iter_name_candidates(path)):
@@ -163,9 +173,6 @@ def _split_compound_suffix(path: Path) -> tuple[str, str]:
     return p.stem, p.suffix
 
 
-# --------------------------------------------------------------------------- #
-# Output naming
-# --------------------------------------------------------------------------- #
 def encrypted_name(source: Path) -> str:
     return f"{Path(source).name}{CONTAINER_SUFFIX}"
 
@@ -194,9 +201,6 @@ def is_keyfile_name(path: Path) -> bool:
     )
 
 
-# --------------------------------------------------------------------------- #
-# Path validation
-# --------------------------------------------------------------------------- #
 def validate_source_file(path: Path) -> Path:
     resolved = Path(path).expanduser().resolve()
     if not resolved.exists():
@@ -208,57 +212,15 @@ def validate_source_file(path: Path) -> Path:
     return resolved
 
 
-def validate_target_dir(path: Path) -> Path:
+def validate_source_dir(path: Path) -> Path:
     resolved = Path(path).expanduser().resolve()
-    if not resolved.exists():
-        raise MemocypherError(f"Directory does not exist: {resolved}")
     if not resolved.is_dir():
         raise MemocypherError(f"Not a directory: {resolved}")
-    if not os.access(resolved, os.W_OK):
-        raise MemocypherError(f"Directory is not writable: {resolved}")
+    if not os.access(resolved, os.R_OK):
+        raise MemocypherError(f"Directory is not readable: {resolved}")
     return resolved
 
 
-def is_within(path: Path, root: Path) -> bool:
-    """True if ``path`` is ``root`` or lives underneath it (after resolving)."""
-
-    try:
-        Path(path).expanduser().resolve().relative_to(Path(root).expanduser().resolve())
-        return True
-    except ValueError:
-        return False
-
-
-_SYSTEM_PREFIXES: tuple[Path, ...]
-if sys.platform.startswith("win"):
-    _SYSTEM_PREFIXES = (
-        Path(os.environ.get("SystemRoot", r"C:\Windows")),  # noqa: SIM112 - real var name
-        Path(r"C:\Program Files"),
-        Path(r"C:\Program Files (x86)"),
-    )
-else:
-    _SYSTEM_PREFIXES = tuple(
-        Path(p) for p in ("/bin", "/sbin", "/usr", "/etc", "/boot", "/sys", "/proc", "/dev", "/lib", "/lib64")
-    )
-
-
-def looks_like_system_path(path: Path) -> bool:
-    """Advisory only: is this path under a well-known OS directory?
-
-    Used to warn before encrypting something that would break the machine. It
-    is a courtesy check, not a security boundary.
-    """
-
-    try:
-        resolved = Path(path).expanduser().resolve()
-    except OSError:
-        return False
-    return any(is_within(resolved, prefix) for prefix in _SYSTEM_PREFIXES)
-
-
-# --------------------------------------------------------------------------- #
-# Deletion
-# --------------------------------------------------------------------------- #
 def delete_file(path: Path) -> None:
     """Delete a file with a normal unlink.
 

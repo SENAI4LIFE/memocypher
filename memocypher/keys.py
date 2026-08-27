@@ -31,9 +31,6 @@ _MAGIC_LINE = "memocypher-key/1"
 _KEY_BYTES = 32
 
 
-# --------------------------------------------------------------------------- #
-# Encoding helpers
-# --------------------------------------------------------------------------- #
 def _b64u_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
@@ -43,16 +40,13 @@ def _b64u_decode(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + pad)
 
 
-# --------------------------------------------------------------------------- #
-# Key references (metadata, never raw key material)
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class KeyRef:
     path: Path
     key_id: str | None
     label: str = ""
     created: str = ""
-    kind: str = "memocypher"  # or "legacy-fernet"
+    kind: str = "memocypher"
     error: str = ""
 
     @property
@@ -64,9 +58,6 @@ class KeyRef:
         return self.label or self.path.name
 
 
-# --------------------------------------------------------------------------- #
-# Generation
-# --------------------------------------------------------------------------- #
 def generate_key_bytes() -> bytes:
     return os.urandom(_KEY_BYTES)
 
@@ -107,9 +98,6 @@ def generate_keyfile(path: Path, *, label: str = "", overwrite: bool = False) ->
     return write_keyfile(path, generate_key_bytes(), label=label, overwrite=overwrite)
 
 
-# --------------------------------------------------------------------------- #
-# Loading
-# --------------------------------------------------------------------------- #
 def _parse_keyfile_text(text: str) -> dict:
     fields: dict[str, str] = {}
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -173,7 +161,6 @@ def read_key_ref(path: Path) -> KeyRef:
             )
         except (OSError, KeyFileError, ValueError) as exc:
             return KeyRef(path, None, error=str(exc))
-    # Legacy raw Fernet key file
     try:
         raw = path.read_bytes().strip()
         base64.urlsafe_b64decode(raw)
@@ -186,9 +173,6 @@ def load_legacy_fernet_key(path: Path) -> bytes:
     return Path(path).read_bytes().strip()
 
 
-# --------------------------------------------------------------------------- #
-# Key store
-# --------------------------------------------------------------------------- #
 _PRUNE_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".tox"}
 
 
@@ -255,17 +239,6 @@ class KeyStore:
                         stack.append(entry)
                 else:
                     yield entry
-
-    @property
-    def refs(self) -> list[KeyRef]:
-        return list(self._refs)
-
-    def by_id(self) -> dict[str, list[KeyRef]]:
-        index: dict[str, list[KeyRef]] = {}
-        for ref in self._refs:
-            if ref.key_id:
-                index.setdefault(ref.key_id, []).append(ref)
-        return index
 
     def match(self, key_id: str) -> list[KeyRef]:
         return [r for r in self._refs if r.key_id == key_id]

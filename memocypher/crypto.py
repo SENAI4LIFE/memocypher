@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import struct
@@ -54,23 +55,18 @@ from .errors import (
 MAGIC = b"MCYPHER1"
 FORMAT_VERSION = 1
 
-# Plaintext bytes per STREAM segment. 1 MiB keeps peak memory to a few MiB
-# regardless of file size while adding only 16 bytes of tag per segment.
 DEFAULT_SEGMENT_SIZE = 1024 * 1024
 _TAG_LEN = 16
 _KEY_LEN = 32
 _HKDF_SALT_LEN = 16
 _NONCE_PREFIX_LEN = 7
 _MAX_HEADER_LEN = 8192
-_KEY_ID_LEN = 16  # hex characters
+_KEY_ID_LEN = 16
 
 ProgressFn = Callable[[int], None]
 CancelFn = Callable[[], bool]
 
 
-# --------------------------------------------------------------------------- #
-# Key derivation parameters
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class ScryptParams:
     """scrypt cost parameters, stored per file so they can be raised later."""
@@ -113,9 +109,6 @@ def format_key_id(key_id: str) -> str:
     return " ".join(key_id[i : i + 4] for i in range(0, len(key_id), 4))
 
 
-# --------------------------------------------------------------------------- #
-# Credentials
-# --------------------------------------------------------------------------- #
 class Credential:
     """Base class: turns a user secret into a 32-byte master key."""
 
@@ -192,9 +185,6 @@ def _passphrase_key_id(salt: bytes, master_key: bytes) -> str:
     return digest[:_KEY_ID_LEN]
 
 
-# --------------------------------------------------------------------------- #
-# Header
-# --------------------------------------------------------------------------- #
 @dataclass
 class ContainerHeader:
     version: int
@@ -241,7 +231,7 @@ def _build_header_bytes(
     if len(body) > _MAX_HEADER_LEN:
         raise MemocypherError("Encryption header unexpectedly large.")
     framed = MAGIC + struct.pack(">H", len(body)) + body
-    return framed, framed  # framed doubles as HKDF info / AAD
+    return framed, framed
 
 
 def parse_header(prefix: bytes) -> ContainerHeader:
@@ -313,9 +303,6 @@ def looks_like_container(path: os.PathLike | str) -> bool:
         return False
 
 
-# --------------------------------------------------------------------------- #
-# STREAM core
-# --------------------------------------------------------------------------- #
 def _derive_content_key(master_key: bytes, hkdf_salt: bytes, aad: bytes) -> bytes:
     return HKDF(algorithm=_SHA256(), length=_KEY_LEN, salt=hkdf_salt, info=aad).derive(master_key)
 
@@ -443,9 +430,6 @@ def decrypt_stream(
     return header
 
 
-# --------------------------------------------------------------------------- #
-# Path-level convenience (atomic, never partial)
-# --------------------------------------------------------------------------- #
 def encrypt_file(
     src: os.PathLike | str,
     dst: os.PathLike | str,
@@ -487,11 +471,8 @@ def decrypt_legacy_file(
         decrypt_legacy_stream(fin, fout, fernet_key)
 
 
-# --------------------------------------------------------------------------- #
-# Legacy (memocry) Fernet containers
-# --------------------------------------------------------------------------- #
 def decrypt_legacy_stream(src: BinaryIO, dst: BinaryIO, fernet_key: bytes) -> None:
-    """Decrypt a whole-file Fernet blob produced by the original memocry tool.
+    """Decrypt a legacy whole-file Fernet ``.enc`` blob.
 
     Fernet has no streaming mode, so the entire file is loaded into memory.
     """
@@ -512,9 +493,6 @@ def decrypt_legacy_stream(src: BinaryIO, dst: BinaryIO, fernet_key: bytes) -> No
     dst.write(plaintext)
 
 
-# --------------------------------------------------------------------------- #
-# small helpers
-# --------------------------------------------------------------------------- #
 def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
@@ -524,6 +502,4 @@ def _unb64(text: str) -> bytes:
 
 
 def _ct_equal(a: str, b: str) -> bool:
-    import hmac
-
     return hmac.compare_digest(a, b)

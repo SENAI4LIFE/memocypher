@@ -77,10 +77,23 @@ def test_name_helpers():
     assert fsops.decrypted_name(Path("mystery")).endswith(".decrypted")
 
 
-def test_is_within(tmp_path):
-    inside = tmp_path / "sub" / "f.txt"
-    assert fsops.is_within(inside, tmp_path)
-    assert not fsops.is_within(tmp_path.parent, tmp_path)
+def test_resolve_collision_custom_taken_predicate(tmp_path):
+    p = tmp_path / "x.txt"
+    reserved = {p, tmp_path / "x (2).txt"}
+    got = fsops.resolve_collision(
+        p, fsops.CollisionPolicy.RENAME, taken=lambda c: c in reserved
+    )
+    assert got.name == "x (3).txt"
+
+
+def test_atomic_writer_is_seekable_for_zipfile(tmp_path):
+    import zipfile
+
+    target = tmp_path / "bundle.zip"
+    with fsops.atomic_writer(target) as fh, zipfile.ZipFile(fh, "w") as zf:
+        zf.writestr("hello.txt", b"hi there")
+    with zipfile.ZipFile(target) as zf:
+        assert zf.read("hello.txt") == b"hi there"
 
 
 def test_delete_file(tmp_path):
@@ -88,7 +101,7 @@ def test_delete_file(tmp_path):
     p.write_text("bye")
     fsops.delete_file(p)
     assert not p.exists()
-    fsops.delete_file(p)  # no error on missing file
+    fsops.delete_file(p)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")

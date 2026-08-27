@@ -21,16 +21,26 @@ from memocypher.gui import theme as theme_mod  # noqa: E402
 
 @pytest.fixture
 def app():
-    try:
-        from memocypher.gui.app import MemocypherApp
+    from memocypher.gui.app import MemocypherApp
 
-        instance = MemocypherApp()
-    except tk.TclError as exc:  # pragma: no cover - depends on environment
-        pytest.skip(f"no display: {exc}")
+    instance = None
+    last_exc: tk.TclError | None = None
+    for _ in range(4):
+        try:
+            instance = MemocypherApp()
+            break
+        except tk.TclError as exc:  # pragma: no cover - environment dependent
+            last_exc = exc
+            time.sleep(0.2)
+    if instance is None:
+        pytest.skip(f"no usable Tk display: {last_exc}")
     instance.withdraw()
     yield instance
     with contextlib.suppress(tk.TclError):
         instance.destroy()
+    with contextlib.suppress(tk.TclError):
+        instance.update()
+    time.sleep(0.05)
 
 
 def _pump(app, predicate, timeout=20.0):
@@ -84,6 +94,43 @@ def test_gui_encrypt_then_decrypt_roundtrip(app, tmp_path):
 
     assert (tmp_path / "one (2).txt").read_text() == "hello gui"
     assert (tmp_path / "two (2).bin").read_bytes() == (tmp_path / "two.bin").read_bytes()
+
+
+def test_gui_encrypt_folder_as_archive(app, tmp_path, monkeypatch):
+    import zipfile
+
+    monkeypatch.setattr("memocypher.gui.app.messagebox.askyesno", lambda *a, **k: True)
+
+    proj = tmp_path / "proj"
+    (proj / "docs").mkdir(parents=True)
+    (proj / "docs" / "note.txt").write_text("folder content")
+    (proj / "run.sh").write_text("echo hi")
+    ref = keys.generate_keyfile(tmp_path / "k")
+
+    app.workspace_dir = tmp_path
+    app.collision_choice.set("rename")
+    app.cred_segments._select("keyfile")
+    app.keyfile_path.set(str(ref.path))
+    app.refresh()
+
+    folder_rows = [i for i in app.tree.get_children() if i.startswith("folder::")]
+    assert folder_rows, "workspace folder should be listed"
+    app.tree.selection_set(folder_rows)
+    app.encrypt_selection()
+    assert _pump(app, lambda: app.runner is None)
+
+    container = tmp_path / "proj.zip.mcz"
+    assert container.is_file()
+    assert not list(tmp_path.glob("*.zip"))
+
+    app.refresh()
+    enc_rows = [i for i in app.tree.get_children() if i.startswith("encrypted::")]
+    app.tree.selection_set(enc_rows)
+    app.decrypt_selection()
+    assert _pump(app, lambda: app.runner is None)
+    with zipfile.ZipFile(tmp_path / "proj.zip") as zf:
+        zf.extractall(tmp_path / "x")
+    assert (tmp_path / "x" / "docs" / "note.txt").read_text() == "folder content"
 
 
 def test_gui_search_and_filter(app, tmp_path):

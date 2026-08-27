@@ -39,9 +39,6 @@ EXIT_FAILURE = 1
 EXIT_USAGE = 2
 
 
-# --------------------------------------------------------------------------- #
-# Argument parsing
-# --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="memocypher",
@@ -69,7 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("paths", nargs="+", type=Path, help="files or directories")
         p.add_argument("-o", "--out", type=Path, metavar="DIR", help="write outputs to DIR")
         p.add_argument(
-            "-r", "--recursive", action="store_true", help="descend into directories"
+            "-r",
+            "--recursive",
+            action="store_true",
+            help="process each file in a directory separately "
+            "(default: pack the whole directory into one archive)",
         )
         p.add_argument(
             "--on-collision",
@@ -85,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("-q", "--quiet", action="store_true", help="only print problems")
         p.add_argument("--json", action="store_true", help="print a JSON summary")
 
-    p_enc = sub.add_parser("encrypt", help="encrypt files")
+    p_enc = sub.add_parser("encrypt", help="encrypt files or folders")
     add_common_io(p_enc)
     add_credential_opts(p_enc)
 
@@ -96,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--legacy-key",
         type=Path,
         metavar="FILE",
-        help="raw Fernet .key for decrypting original memocry files",
+        help="raw Fernet .key for decrypting legacy whole-file .enc containers",
     )
 
     p_keygen = sub.add_parser("keygen", help="generate a new .mckey key file")
@@ -127,14 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# --------------------------------------------------------------------------- #
-# Entry point
-# --------------------------------------------------------------------------- #
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
-        # Bare `memocypher` launches the GUI; use a subcommand for the CLI.
         return _cmd_gui(args)
     try:
         handler = _HANDLERS[args.command]
@@ -150,9 +147,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_FAILURE
 
 
-# --------------------------------------------------------------------------- #
-# Credential resolution
-# --------------------------------------------------------------------------- #
 def _resolve_credential(args, *, confirm: bool) -> Credential:
     if getattr(args, "keyfile", None):
         try:
@@ -164,7 +158,6 @@ def _resolve_credential(args, *, confirm: bool) -> Credential:
         if not text or not text[0]:
             raise SystemExitCode(EXIT_USAGE, "error: passphrase file is empty")
         return PassphraseCredential(text[0])
-    # default: prompt (or read one line from a pipe when not on a terminal)
     interactive = bool(sys.stdin) and sys.stdin.isatty()
     first = _read_secret("Passphrase: ", interactive)
     if not first:
@@ -190,19 +183,26 @@ class SystemExitCode(Exception):
         self.message = message
 
 
-# --------------------------------------------------------------------------- #
-# Input expansion
-# --------------------------------------------------------------------------- #
 def _expand(paths: Iterable[Path], *, recursive: bool, want: str) -> tuple[list[Path], list[str]]:
-    files: list[Path] = []
+    """Resolve the given paths to a list of targets for the planner.
+
+    encrypt: a directory passes through untouched (it is archived as one
+    container) unless ``recursive`` is set, which expands it to its files.
+    decrypt: a directory always needs ``recursive`` and yields its containers.
+    """
+
+    out: list[Path] = []
     problems: list[str] = []
     for path in paths:
         path = Path(path)
         if path.is_file():
-            files.append(path)
+            out.append(path)
         elif path.is_dir():
+            if want == "encrypt" and not recursive:
+                out.append(path)
+                continue
             if not recursive:
-                problems.append(f"{path} is a directory (use -r to descend)")
+                problems.append(f"{path} is a directory (use -r)")
                 continue
             for child in sorted(path.rglob("*")):
                 if not child.is_file():
@@ -213,15 +213,12 @@ def _expand(paths: Iterable[Path], *, recursive: bool, want: str) -> tuple[list[
                     continue
                 if want == "decrypt" and not fsops.is_container_name(child):
                     continue
-                files.append(child)
+                out.append(child)
         else:
             problems.append(f"{path} does not exist")
-    return files, problems
+    return out, problems
 
 
-# --------------------------------------------------------------------------- #
-# Commands
-# --------------------------------------------------------------------------- #
 def _cmd_encrypt(args) -> int:
     return _run_batch(args, want="encrypt")
 

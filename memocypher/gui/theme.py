@@ -14,7 +14,6 @@ import tkinter.font as tkfont
 from dataclasses import dataclass
 from tkinter import ttk
 
-# Spacing scale (px)
 XS, SM, MD, LG, XL = 4, 8, 12, 16, 24
 
 _FONT_STACK = (
@@ -81,7 +80,6 @@ class Theme:
     mono: str
     base_size: int = 10
 
-    # ----- font helpers -------------------------------------------------- #
     def font(self, *, size: int | None = None, weight: str = "normal") -> tuple:
         return (self.family, size or self.base_size, weight)
 
@@ -103,7 +101,6 @@ class Theme:
     def c(self, name: str) -> str:
         return self.colors[name]
 
-    # ----- application ------------------------------------------------------ #
     def apply(self, root: tk.Misc) -> None:
         colors = self.colors
         style = ttk.Style(root)
@@ -137,7 +134,6 @@ class Theme:
         style.configure("H1.TLabel", background=colors["bg"], foreground=colors["text"], font=self.h1)
         style.configure("H2.TLabel", background=colors["bg"], foreground=colors["text"], font=self.h2)
 
-        # Buttons
         style.configure(
             "TButton",
             background=colors["surface_alt"],
@@ -180,7 +176,6 @@ class Theme:
         )
         style.map("Ghost.TButton", background=[("active", colors["surface_alt"])])
 
-        # Entry / Combobox
         for name in ("TEntry", "TCombobox"):
             style.configure(
                 name,
@@ -198,7 +193,6 @@ class Theme:
                 bordercolor=[("focus", colors["focus_ring"])],
             )
 
-        # Treeview
         style.configure(
             "Treeview",
             background=colors["surface"],

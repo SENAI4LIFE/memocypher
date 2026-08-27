@@ -50,6 +50,30 @@ def test_encrypt_decrypt_directory_roundtrip_keyfile(tmp_path, capsys):
     assert (dec / "two.bin").read_bytes() == (src / "two.bin").read_bytes()
 
 
+def test_encrypt_directory_without_recursive_makes_one_archive(tmp_path, capsys):
+    import zipfile
+
+    src = tmp_path / "album"
+    (src / "sub").mkdir(parents=True)
+    (src / "a.txt").write_text("a")
+    (src / "sub" / "b.txt").write_text("b")
+
+    keypath = tmp_path / "k.mckey"
+    cli.main(["keygen", "-o", str(keypath)])
+    capsys.readouterr()
+
+    assert cli.main(["encrypt", str(src), "--keyfile", str(keypath), "-o", str(tmp_path / "e")]) == 0
+    container = tmp_path / "e" / "album.zip.mcz"
+    assert container.is_file()
+
+    dec = tmp_path / "d"
+    assert cli.main(["decrypt", str(container), "--keyfile", str(keypath), "-o", str(dec)]) == 0
+    with zipfile.ZipFile(dec / "album.zip") as zf:
+        zf.extractall(dec / "x")
+    assert (dec / "x" / "a.txt").read_text() == "a"
+    assert (dec / "x" / "sub" / "b.txt").read_text() == "b"
+
+
 def test_passphrase_file_roundtrip(tmp_path, passfile, monkeypatch):
     monkeypatch.setattr(
         "memocypher.crypto.DEFAULT_SCRYPT", cli.crypto.ScryptParams(n=1 << 12)

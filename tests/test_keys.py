@@ -29,7 +29,7 @@ def test_generate_refuses_silent_overwrite(tmp_path):
     keys.generate_keyfile(tmp_path / "k")
     with pytest.raises(CollisionError):
         keys.generate_keyfile(tmp_path / "k")
-    keys.generate_keyfile(tmp_path / "k", overwrite=True)  # explicit is fine
+    keys.generate_keyfile(tmp_path / "k", overwrite=True)
 
 
 def test_tampered_key_line_is_rejected(tmp_path):

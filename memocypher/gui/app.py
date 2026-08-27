@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import queue
-import shutil
 import sys
-import tempfile
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -56,7 +54,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.theme = make_theme(self, self.mode)
         self.theme.apply(self)
 
-        # ----- state ----------------------------------------------------- #
         self.workspace_dir: Path = Path.cwd()
         self.workspace: Workspace | None = None
         self.view_filter = "all"
@@ -85,14 +82,12 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.after(_POLL_MS, self._poll_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ------------------------------------------------------------------ #
-    # Construction
-    # ------------------------------------------------------------------ #
     def _build_menu(self) -> None:
         menubar = tk.Menu(self)
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open workspace...", accelerator="Ctrl+O", command=self.choose_workspace)
         file_menu.add_command(label="Add files...", accelerator="Ctrl+I", command=self.browse_files)
+        file_menu.add_command(label="Add folder...", command=self.browse_folder)
         file_menu.add_command(label="Refresh", accelerator="F5", command=self.refresh)
         file_menu.add_separator()
         file_menu.add_command(label="Quit", accelerator="Ctrl+Q", command=self._on_close)
@@ -206,7 +201,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         col.grid(row=1, column=1, rowspan=1, sticky="ns")
         body.columnconfigure(1, weight=0)
 
-        # Credential card
         cred = Card(col, self.theme, "Credential", self.theme.c("accent"))
         cred.pack(fill="x", pady=(0, SM))
         self.cred_segments = SegmentedControl(
@@ -233,21 +227,18 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.keyfile_path.trace_add("write", lambda *_: self._refresh_key_info())
         self._on_cred_mode("passphrase")
 
-        # Encrypt card
         enc = Card(col, self.theme, "Encrypt", self.theme.c("encrypted"))
         enc.pack(fill="x", pady=(0, SM))
-        ttk.Label(enc.body, text="Selected plaintext files become .mcz containers.", style="CardMuted.TLabel", wraplength=260).pack(anchor="w", pady=(0, SM))
+        ttk.Label(enc.body, text="Files become .mcz containers; a folder becomes one .zip.mcz archive.", style="CardMuted.TLabel", wraplength=260).pack(anchor="w", pady=(0, SM))
         self.encrypt_btn = ttk.Button(enc.body, text="Encrypt selection", style="Accent.TButton", command=self.encrypt_selection)
         self.encrypt_btn.pack(fill="x")
 
-        # Decrypt card
         dec = Card(col, self.theme, "Decrypt", self.theme.c("plain"))
         dec.pack(fill="x", pady=(0, SM))
         ttk.Label(dec.body, text="Selected .mcz (or legacy .enc) files are restored.", style="CardMuted.TLabel", wraplength=260).pack(anchor="w", pady=(0, SM))
         self.decrypt_btn = ttk.Button(dec.body, text="Decrypt selection", style="Accent.TButton", command=self.decrypt_selection)
         self.decrypt_btn.pack(fill="x")
 
-        # Options card
         opt = Card(col, self.theme, "Options")
         opt.pack(fill="x")
         ttk.Label(opt.body, text="If the output exists", style="CardMuted.TLabel").pack(anchor="w")
@@ -306,9 +297,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.bind("<Control-g>", lambda _e: self.generate_key())
         self.bind("<Delete>", lambda _e: self._unstage_selection())
 
-    # ------------------------------------------------------------------ #
-    # Workspace + listing
-    # ------------------------------------------------------------------ #
     def choose_workspace(self) -> None:
         chosen = filedialog.askdirectory(initialdir=str(self.workspace_dir), parent=self)
         if chosen:
@@ -368,21 +356,26 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
 
         buckets: list[tuple[str, list]] = []
         if self.view_filter in ("all", "plaintext"):
+            buckets.append(("folder", ws.folders))
             buckets.append(("plaintext", ws.plaintext))
         if self.view_filter in ("all", "encrypted"):
             buckets.append(("encrypted", ws.encrypted))
         if self.view_filter in ("all", "keyfile"):
             buckets.append(("keyfile", ws.keyfiles))
 
-        # staged (extra) files first
         for path in self.staged:
             if query and query not in path.name.lower():
                 continue
-            kind = "encrypted" if is_container_name(path) else "plaintext"
             iid = f"staged::{path}"
+            is_dir = path.is_dir()
             tree.insert(
                 "", "end", iid=iid, text=f"  {path.name}",
-                values=("staged", _human_size(_safe_size(path)), str(path.parent), ""),
+                values=(
+                    "staged folder" if is_dir else "staged",
+                    "" if is_dir else _human_size(_safe_size(path)),
+                    str(path.parent),
+                    "",
+                ),
                 tags=("staged",),
             )
             self._row_meta[iid] = path
@@ -391,11 +384,12 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         for kind, entries in buckets:
             for entry in _sorted_entries(entries, key, reverse):
                 iid = f"{kind}::{entry.path}"
+                is_folder = kind == "folder"
                 tree.insert(
                     "", "end", iid=iid, text=f"  {entry.name}",
                     values=(
-                        kind.replace("keyfile", "key"),
-                        _human_size(entry.size),
+                        "folder" if is_folder else kind.replace("keyfile", "key"),
+                        "" if is_folder else _human_size(entry.size),
                         self._detail_for(entry, kind),
                         entry.modified_str,
                     ),
@@ -404,19 +398,19 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
                 self._row_meta[iid] = entry
 
         shown = len(self._row_meta)
-        total = len(ws.plaintext) + len(ws.encrypted) + len(ws.keyfiles)
+        total = len(ws.plaintext) + len(ws.encrypted) + len(ws.keyfiles) + len(ws.folders)
         self.count_label.configure(text=f"{shown} shown / {total} in workspace")
         self._sync_action_state()
 
     def _detail_for(self, entry: FileEntry, kind: str) -> str:
-        """Compact status for the list; full key ids live in Identify / Copy id."""
-
+        if kind == "folder":
+            return f"{entry.child_count} item(s)"
         if kind == "encrypted":
             if entry.container_error:
                 return "unreadable"
             if entry.container is None:
                 return "legacy"
-            if entry.container.cred == "passphrase":
+            if entry.container.is_passphrase:
                 return "passphrase"
             matches = self.workspace.key_ref_for(entry) if self.workspace else []
             return "key ready" if matches else "key missing"
@@ -428,14 +422,11 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
             if ref and ref.error:
                 return "invalid"
             if ref and ref.key_id:
-                short = (ref.key_id or "")[:8]
+                short = ref.key_id[:8]
                 return f"{ref.label} ({short})" if ref.label else short
             return "legacy key"
         return ""
 
-    # ------------------------------------------------------------------ #
-    # Selection helpers
-    # ------------------------------------------------------------------ #
     def _selection(self) -> list[FileEntry | Path]:
         return [self._row_meta[iid] for iid in self.tree.selection() if iid in self._row_meta]
 
@@ -457,9 +448,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.encrypt_btn.state(["!disabled"] if paths or self.staged else ["disabled"])
         self.decrypt_btn.state(["!disabled"] if has_enc else ["disabled"])
 
-    # ------------------------------------------------------------------ #
-    # Credential
-    # ------------------------------------------------------------------ #
     def _on_cred_mode(self, mode: str) -> None:
         self.credential_mode = mode
         self.credential = None
@@ -520,63 +508,43 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
             self.cred_status.configure(text="Passphrase set", foreground=self.theme.c("success"))
         return PassphraseCredential(self._passphrase_cache)
 
-    # ------------------------------------------------------------------ #
-    # Encrypt / Decrypt
-    # ------------------------------------------------------------------ #
     def _gather_encrypt_targets(self) -> list[Path]:
         targets: list[Path] = list(self.staged)
-        temp_archives: list[Path] = []
         for meta in self._selection():
-            if isinstance(meta, Path):
-                if meta not in targets:
-                    targets.append(meta)
-                continue
-            if meta.kind == "folder":
-                archive = self._archive_folder(meta.path)
-                if archive:
-                    targets.append(archive)
-                    temp_archives.append(archive)
-            elif meta.kind == "plaintext" and meta.path not in targets:
-                targets.append(meta.path)
-        self._temp_archives = temp_archives
+            path = meta if isinstance(meta, Path) else meta.path
+            kind = None if isinstance(meta, Path) else meta.kind
+            if kind in (None, "plaintext", "folder") and path not in targets:
+                targets.append(path)
         return [p for p in targets if not is_container_name(p)]
-
-    def _archive_folder(self, folder: Path) -> Path | None:
-        if not messagebox.askyesno(
-            "Encrypt folder",
-            f"Package '{folder.name}' into a single .zip and encrypt that?\n\n"
-            "Choose No to select individual files instead.",
-            parent=self,
-        ):
-            return None
-        try:
-            tmp_base = Path(tempfile.mkdtemp(prefix="memocypher-")) / folder.name
-            archive = Path(shutil.make_archive(str(tmp_base), "zip", root_dir=folder))
-            final = folder.parent / archive.name
-            shutil.move(str(archive), final)
-            return final
-        except OSError as exc:
-            self.toast.show(f"Could not archive folder: {exc}", "error")
-            return None
 
     def encrypt_selection(self) -> None:
         if self._busy():
             return
         targets = self._gather_encrypt_targets()
         if not targets:
-            self.toast.show("Select one or more plaintext files.", "warning")
+            self.toast.show("Select one or more plaintext files or folders.", "warning")
+            return
+        folders = [p for p in targets if p.is_dir()]
+        if folders and not messagebox.askyesno(
+            "Encrypt folders",
+            f"{len(folders)} folder(s) will each be packed into a single "
+            "'.zip.mcz' archive, then the zip is deleted.\n\nContinue?",
+            parent=self,
+        ):
             return
         credential = self._resolve_credential(for_encrypt=True)
         if credential is None:
             return
-        policy = self._decide_policy(
-            lambda p: batch.plan_encrypt(targets, credential, collision=p, delete_source=self.delete_after.get())
-        )
+
+        def planner(policy):
+            return batch.plan_encrypt(
+                targets, credential, collision=policy, delete_source=self.delete_after.get()
+            )
+
+        policy = self._decide_policy(planner)
         if policy is None:
             return
-        jobs, skipped = batch.plan_encrypt(
-            targets, credential, collision=policy, delete_source=self.delete_after.get()
-        )
+        jobs, skipped = planner(policy)
         self._start_batch(jobs, skipped, verb="Encrypting")
 
     def decrypt_selection(self) -> None:
@@ -637,15 +605,11 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         if choice != "ask":
             return CollisionPolicy(choice)
         _, skipped = planner(CollisionPolicy.ERROR)
-        clashes = [s.path.name for s in skipped if "exists" in s.reason]
+        clashes = [s.path.name for s in skipped if s.collision]
         if not clashes:
             return CollisionPolicy.ERROR
-        picked = dialogs.ask_collision_policy(self, self.theme, clashes)
-        return picked
+        return dialogs.ask_collision_policy(self, self.theme, clashes)
 
-    # ------------------------------------------------------------------ #
-    # Batch lifecycle
-    # ------------------------------------------------------------------ #
     def _busy(self) -> bool:
         if self.runner and self.runner.is_alive():
             self.toast.show("An operation is already running.", "warning")
@@ -698,7 +662,7 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         elif isinstance(event, ItemFinished):
             self._batch_done_bytes += event.job.total_bytes
             r = event.result
-            tag = r.status.value if r.status.value in ("ok", "failed", "skipped") else "skipped"
+            tag = {"ok": "ok", "failed": "failed"}.get(r.status.value, "skipped")
             self.results.insert(
                 "", "end", text=f"  {event.job.src.name}  ->  {event.job.dst.name}",
                 values=(r.status.value, r.message), tags=(tag,),
@@ -709,13 +673,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
     def _finish_batch(self, summary) -> None:
         self.progress.pack_forget()
         self.cancel_btn.pack_forget()
-        for tmp in getattr(self, "_temp_archives", []):
-            try:
-                tmp.unlink()
-                shutil.rmtree(tmp.parent, ignore_errors=True)
-            except OSError:
-                pass
-        self._temp_archives = []
         for skip in summary.skipped:
             self.results.insert("", "end", text=f"  {skip.path.name}", values=("skipped", skip.reason), tags=("skipped",))
         msg = f"{summary.ok_count} done, {summary.failed_count} failed, {summary.skipped_count} skipped"
@@ -726,9 +683,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.runner = None
         self.refresh()
 
-    # ------------------------------------------------------------------ #
-    # Results panel
-    # ------------------------------------------------------------------ #
     def _toggle_results(self) -> None:
         self._results_visible = not getattr(self, "_results_visible", True)
         if self._results_visible:
@@ -746,9 +700,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         for skip in skipped:
             self.results.insert("", "end", text=f"  {skip.path.name}", values=("skipped", skip.reason), tags=("skipped",))
 
-    # ------------------------------------------------------------------ #
-    # Keys / misc actions
-    # ------------------------------------------------------------------ #
     def generate_key(self) -> None:
         ref = dialogs.generate_key_dialog(self, self.theme, self.workspace_dir)
         if ref:
@@ -779,9 +730,9 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         lines = []
         for entry in entries:
             if entry.container is None:
-                lines.append(f"{entry.name}: legacy memocry file")
+                lines.append(f"{entry.name}: legacy container, decrypt with its .key")
                 continue
-            if entry.container.cred == "passphrase":
+            if entry.container.is_passphrase:
                 lines.append(f"{entry.name}: needs its passphrase")
                 continue
             matches = store.match(entry.key_id or "")
@@ -793,31 +744,33 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
 
     def browse_files(self) -> None:
         chosen = filedialog.askopenfilenames(parent=self, initialdir=str(self.workspace_dir))
+        self._stage_paths(Path(p) for p in chosen)
+
+    def browse_folder(self) -> None:
+        chosen = filedialog.askdirectory(parent=self, initialdir=str(self.workspace_dir))
+        if chosen:
+            self._stage_paths([Path(chosen)])
+
+    def _stage_paths(self, paths) -> None:
         added = 0
-        for raw in chosen:
-            path = Path(raw)
+        for path in paths:
             if path not in self.staged:
                 self.staged.append(path)
                 added += 1
         if added:
             self._populate()
-            self.toast.show(f"Added {added} file(s) to the working set.", "info")
+            self.toast.show(f"Added {added} item(s) to the working set.", "info")
 
     def _on_drop(self, paths: list[str]) -> None:
         added = 0
         for raw in paths:
             path = Path(raw)
-            if path.is_dir():
-                for child in sorted(path.rglob("*")):
-                    if child.is_file() and child not in self.staged:
-                        self.staged.append(child)
-                        added += 1
-            elif path.is_file() and path not in self.staged:
+            if (path.is_file() or path.is_dir()) and path not in self.staged:
                 self.staged.append(path)
                 added += 1
         if added:
             self._populate()
-            self.toast.show(f"Added {added} dropped file(s).", "info")
+            self.toast.show(f"Added {added} item(s). Folders encrypt as one archive.", "info")
 
     def _unstage_selection(self) -> None:
         removed = 0
@@ -876,12 +829,10 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         except OSError as exc:
             self.toast.show(str(exc), "error")
 
-    # ------------------------------------------------------------------ #
     def toggle_mode(self) -> None:
         self.mode = "light" if self.mode == "dark" else "dark"
         self.theme = make_theme(self, self.mode)
         self.theme.apply(self)
-        # Rebuild tag colours on the trees
         for tree, tags in (
             (self.tree, (("plaintext", "plain"), ("encrypted", "encrypted"), ("keyfile", "key"), ("folder", "muted"), ("staged", "accent"), ("bad", "danger"))),
             (self.results, (("ok", "success"), ("failed", "danger"), ("skipped", "muted"))),
@@ -898,9 +849,6 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.destroy()
 
 
-# --------------------------------------------------------------------------- #
-# helpers
-# --------------------------------------------------------------------------- #
 def _sorted_entries(entries: list[FileEntry], key: str, reverse: bool) -> list[FileEntry]:
     keyers = {
         "name": lambda e: e.name.lower(),
