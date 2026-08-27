@@ -1,178 +1,207 @@
-# memocry
+# memocypher
 
-A self-contained, zero-footprint Python utility for symmetric file-level encryption and decryption. Built on authenticated Fernet cryptography with a modern dark-themed GUI. Two files. No installation. Runs anywhere Python 3.10+ is available.
+Authenticated file encryption with a desktop GUI and a command-line interface.
 
----
+[![CI](https://github.com/SENAI4LIFE/memocypher/actions/workflows/ci.yml/badge.svg)](https://github.com/SENAI4LIFE/memocypher/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Lint: Ruff](https://img.shields.io/badge/lint-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#requirements)
+
+memocypher encrypts individual files into self-describing `.mcz` containers.
+Each container is sealed with AES-256-GCM in a streaming construction, so files
+of any size are processed with constant memory and any truncation, reordering
+or modification of the ciphertext is detected before a single byte of
+plaintext is written. Credentials are either a passphrase (stretched with
+scrypt) or a 256-bit key file that carries a stable key id.
 
 ## Requirements
 
-- Python 3.10 or higher
-- `cryptography` library
+- Python 3.10 or newer
+- [`cryptography`](https://cryptography.io/) (installed automatically)
+- Tkinter for the GUI. It ships with the official Python installers on Windows
+  and macOS. On Debian/Ubuntu: `sudo apt install python3-tk`. The command-line
+  interface works without Tkinter.
+- Optional: `tkinterdnd2` for drag-and-drop into the window.
 
----
+## Installation
 
-## Setup
+Install from a checkout with pipx (recommended) or pip:
 
-
-```bash
-sudo apt install python3.12-venv python3-pip
 ```
-### Windows
-
-```cmd
-python -m venv venv
-venv\Scripts\activate
-pip install cryptography
+pipx install .
+# or
+python -m pip install .
 ```
 
-### macOS
+This provides two entry points: `memocypher` (CLI, and the GUI when run with no
+arguments) and `memocypher-gui` (GUI without a console window).
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install cryptography
+To include drag-and-drop:
+
+```
+python -m pip install ".[dnd]"
 ```
 
-### Linux
+To run from source without installing:
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install cryptography
 ```
-
----
+python -m pip install cryptography
+python -m memocypher            # GUI
+python -m memocypher --help     # CLI
+```
 
 ## Usage
 
-```bash
-python memocry.py
+### Graphical interface
+
+```
+memocypher
 ```
 
-On first launch memocry opens in your current working directory as the **Family Folder** — the directory it scans and operates on by default.
+1. Set the **workspace** to the folder you want to work in. Its files are
+   listed and grouped as plaintext, encrypted or key files.
+2. Choose a **credential**: set a passphrase, or select a `.mckey` key file
+   (generate one from the Keys card or the Keys menu).
+3. Select files in the list, or drag them into the window, and click
+   **Encrypt selection** or **Decrypt selection**.
+4. Watch progress in the status bar; per-file outcomes appear in the Results
+   panel.
 
----
+Keyboard: `Ctrl+O` open workspace, `Ctrl+I` add files, `F5` refresh,
+`Ctrl+F` search, `Ctrl+E` encrypt, `Ctrl+D` decrypt, `Ctrl+G` generate key,
+`Delete` remove a dragged-in file from the list, `Enter` acts on the selection.
 
-## Core Workflow
+### Command line
 
-### Encrypt
+```
+memocypher keygen -o family.mckey --label "family photos"
+memocypher encrypt ./documents -r --keyfile family.mckey -o ./vault
+memocypher decrypt ./vault -r --keyfile family.mckey -o ./restored
+memocypher identify ./vault/*.mcz          # which key does each file need?
+memocypher keyinfo ./vault/report.pdf.mcz  # credential type and key id
+memocypher scan ./vault --json
+```
 
-1. Select files in the **Plain Files** panel (Ctrl/Shift+click for multi-select), or click **Browse Files** in the ENCRYPT panel.
-2. Select or generate a key. If no key is loaded, memocry will offer to generate one automatically.
-3. Click **Encrypt Selected**. Each file becomes `filename.ext.enc`.
+Passphrase mode is the default when `--keyfile` is omitted; the passphrase is
+requested interactively. For automation, `--passphrase-file FILE` reads it from
+the first line of a file (weaker, because the passphrase touches disk).
 
-### Decrypt
+Collision handling is explicit. By default an existing output is an error;
+pass `--on-collision rename|overwrite|skip` to change that. `--delete-source`
+removes each input only after its output is verified written.
 
-1. Select files in the **Encrypted Files** panel, or click **Browse Files** in the DECRYPT panel.
-2. Select a key. If a paired key exists in the same folder, it auto-fills.
-3. Click **Decrypt Selected**.
+Exit codes: `0` success, `1` one or more items failed or were skipped, `2`
+usage error.
 
-### Keys
+## Workflows
 
-Keys are Fernet keys stored as `.key` files. Generate them via **Generate & Save Key** in the KEY MANAGEMENT panel or when prompted during encryption. **Back up every key to a separate secure location immediately.** Loss of a key makes all files encrypted with it permanently and irreversibly unrecoverable.
+**Per-file encryption.** Encrypting `report.pdf` produces `report.pdf.mcz`
+next to it (or in `--out`). Decrypting restores `report.pdf`; if that name is
+taken, `rename` writes `report (2).pdf` rather than overwriting.
 
----
+**Folders.** In the GUI, selecting a folder and choosing Encrypt offers to
+package it into a single `.zip` and encrypt that. On the CLI, `encrypt DIR -r`
+encrypts each file in the tree individually, skipping existing `.mcz` and
+`.mckey` files.
 
-## Features
+**Batches.** Any selection is processed as one batch. A failure on one file
+does not stop the rest; every outcome is reported.
 
-### File Panels
+**Identifying keys.** Key-file containers store the key id in their header.
+`memocypher identify` (CLI) and the Identify action (GUI) match containers to
+the `.mckey` files found in the workspace and your home directory, so you never
+have to guess which key opens which file.
 
-| Panel | Color | Content |
-|---|---|---|
-| 📄 Plain Files | Green | Regular files and subfolders in the family folder |
-| 🔒 Encrypted Files | Purple | `.enc` files with key-pairing status (Found / Missing) |
-| 🗝 Detected Keys | Orange | `.key` files discovered in the family folder |
-
-- **Folders** appear in the Plain Files panel with a 📁 icon and file count, distinct from regular files
-- File names display without full path — name only, extension in a dedicated column
-- Column widths are fixed; the window never auto-resizes after launch
-
-### Folder Encryption
-
-The **Add Folder** button and the folder right-click menu offer two modes:
-
-- **Encrypt each file individually** — queues every plain file inside the folder for the next encrypt operation
-- **Zip folder then Encrypt** — creates a `.zip` archive of the entire folder, encrypts it immediately using the loaded key, then deletes the intermediate zip automatically
-
-### Batch Operations
-
-All encrypt and decrypt actions are batched and run on a background thread. The GUI remains fully responsive during long operations. A progress bar appears during processing and disappears on completion.
-
-### Right-click Context Menus
-
-Context menus are context-aware — files, folders, encrypted files, and keys each have their own set of actions.
-
-**Plain files:** Encrypt Selected, Rename, Move to, Compress (zip), Secure Wipe, Properties, Remove from list, Delete
-
-**Folders:** Encrypt files individually, Zip folder then Encrypt, Compress (zip only), Rename, Move to, Properties
-
-**Encrypted files:** Decrypt Selected, Find Key, Rename, Move to, Compress (zip), Secure Wipe, Properties, Remove from list, Delete
-
-**Keys:** Use for Encryption, Use for Decryption, Rename, Move to, Properties, Delete key
-
-### Key Management
-
-- **Generate & Save Key** — creates a new cryptographically secure Fernet key, lets you name it and choose where to save it
-- **Remove Selected Key** — deletes the key currently selected in the Detected Keys panel
-- **Delete All Detected Keys** — permanently deletes all `.key` files in the family folder, double-confirmed
-
-### Secure Wipe
-
-Available via right-click on any file. Performs a **3-pass random overwrite** before deletion, making data recovery significantly harder than a standard delete. Useful before disposing of hardware or removing sensitive plaintext after encryption.
-
-### Smart Key Pairing
-
-When you select an encrypted file, memocry checks whether a matching `.key` file exists alongside it and auto-fills the DECRYPT key field. The **Find Key** context menu action searches the family folder and home directory for compatible keys if the paired key is missing.
-
-### Session Toggles
-
-All toggles are volatile — they reset to off on every launch and are never written to disk.
-
-| Toggle | Effect |
-|---|---|
-| Delete source after encrypt | Deletes original plain files after successful encryption |
-| Delete .enc after decrypt | Deletes the `.enc` file after successful decryption |
-| Delete key after encrypt | Deletes the key file after encryption completes |
-| Delete key after decrypt | Deletes the key file after decryption completes |
-| Extra warnings | Adds confirmation dialogs before every operation |
-| No warnings | Suppresses all optional confirmations |
-
-Safety-critical warnings — encrypting memocry.py itself, encrypting the active key — always fire regardless of toggle state.
-
-### Session Log
-
-A volatile in-RAM activity log recording every operation, skip, and error. Toggle visibility with **Show / Hide** in the top bar. Never written to disk. Cleared on exit.
-
----
-
-## Security Model
-
-- **Fernet (AES-128-CBC + HMAC-SHA256)** — authenticated encryption; any tampering or wrong key aborts decryption immediately with no partial output written
-- **Atomic writes** — output is written to a `.tmp` file first and renamed on success; partial writes never corrupt the destination
-- **Memory hygiene** — key material is explicitly dereferenced after use in every code path
-- **System file protection** — known system paths and root-owned files are flagged before encryption proceeds
-- **In-use detection** — files open by another process are warned about before modification
-- **No persistence** — all preferences, session state, and key material exist only in RAM; nothing is stored between sessions
-- **Path sanitization** — all user-provided paths are resolved and validated before any file operation
-- **Separation of concerns** — the GUI layer never holds raw key material; the cryptographic engine is fully isolated
-
----
+**Opening files from the original tool.** Containers made by the earlier
+`memocry` utility used whole-file Fernet. Decrypt them by supplying the old
+raw key: `memocypher decrypt secret.txt.enc --legacy-key secret.txt.key`.
+There is no legacy re-encryption; re-encrypt with a current credential.
 
 ## Architecture
 
+memocypher is a small Python package with a clear boundary between the
+cryptographic core and the interfaces.
+
 ```
-memocry.py
-├── CryptographicEngine     — Fernet encrypt/decrypt, key gen/save, zip, secure wipe
-├── PathValidator           — input/output/key path sanitization and access checks
-├── FamilyFolderScanner     — discovers plain files, encrypted files, keys, subfolders
-├── BatchOperationWorker    — background thread for all batch encrypt/decrypt jobs
-├── ToggleButton            — session option toggle widget
-├── KeySaveDialog           — key generation and save dialog
-├── KeySearchDialog         — key search and match dialog
-├── ContextMenu             — right-click menus for files, folders, encrypted files, keys
-├── KeyInfoLabel            — active key display widget in operation panels
-└── MemocryApp              — main application window and orchestration
+memocypher/
+  crypto.py     Container format, AES-256-GCM-HKDF STREAM, scrypt, key ids,
+                legacy Fernet reader. No filesystem or UI code.
+  keys.py       .mckey format, key generation, KeyStore (discovery + matching).
+  fsops.py      Atomic writes, collision policies, output naming, path checks.
+  scanner.py    Scans a workspace into plaintext / encrypted / key buckets.
+  batch.py      Plans jobs (resolving collisions up front) and runs them with
+                progress events and cancellation. Threaded wrapper for the GUI.
+  cli.py        argparse command-line interface.
+  gui/          Tkinter application: theme tokens, widgets, dialogs, drag-and-drop.
 ```
 
----
+### Container format (`memocypher/1`)
 
+```
+magic        8 bytes   "MCYPHER1"
+header_len   2 bytes   big-endian uint16
+header       JSON      version, credential type, scrypt parameters + salt,
+                       key id, STREAM segment size, HKDF salt, nonce prefix
+body         segments  AES-256-GCM sealed 1 MiB plaintext segments
+```
+
+A per-file content key is derived with HKDF-SHA256 over the master key, salted,
+and bound to the exact header bytes. Each segment's nonce is a random per-file
+prefix plus the segment index plus a "final segment" flag; the flag and the
+positional index make truncation, reordering and extension fail authentication.
+
+## Security
+
+What memocypher guarantees:
+
+- **Confidentiality and integrity.** AES-256-GCM authenticates every segment.
+  A wrong passphrase or key file, or any change to the header or ciphertext,
+  aborts decryption with an error and no plaintext output.
+- **Truncation resistance.** Removing, appending or reordering segments is
+  detected, not silently accepted.
+- **Bounded memory.** Files stream a segment at a time; a multi-gigabyte file
+  does not need multi-gigabyte RAM.
+- **No partial or clobbered files.** Output is written to a temporary file,
+  flushed, then atomically renamed. Existing files are never overwritten unless
+  you choose `overwrite`.
+- **Passphrase stretching.** scrypt with N = 2^17, r = 8, p = 1; the parameters
+  are stored per file so they can be raised in future without breaking old
+  containers.
+
+What it deliberately does not claim:
+
+- **No secure erase of plaintext.** On SSDs (wear levelling, over-provisioning)
+  and on journaling or copy-on-write filesystems, overwriting a file's visible
+  blocks does not reliably destroy the data. memocypher does a normal delete
+  and nothing more. Protect data at rest with full-disk encryption.
+- **No in-memory key protection.** Python cannot reliably zero secrets in
+  memory, so no such guarantee is made.
+- **Metadata is not hidden.** Anyone with a container can see its size, that it
+  is a memocypher file, whether it uses a passphrase or a key file, and, for
+  key-file mode, the key id. File names are not stored in the container.
+- **Not transport security.** It protects files at rest, not data in transit.
+
+Key management:
+
+- Losing a key file, or forgetting a passphrase, means the data is
+  unrecoverable. There is no backdoor.
+- Back up every key file to separate, secure storage the moment you create it.
+- A key file is plaintext key material. Keep it away from the data it protects.
+
+## Development
+
+```
+python -m pip install -e ".[dev]"
+python -m pytest
+ruff check .
+```
+
+The test suite covers the container format (round trips, tamper and truncation
+detection, wrong credentials), key files and matching, atomic writes and
+collision policies, workspace scanning, batch planning and execution, the CLI,
+and a GUI smoke test that drives a real window without entering the main loop.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
