@@ -8,7 +8,7 @@ from importlib import resources
 import pytest
 
 ASSETS = resources.files("memocypher.gui") / "assets"
-RGBA = 6
+RGB, RGBA = 2, 6
 
 
 def png_header(data: bytes) -> tuple[int, int, int]:
@@ -18,22 +18,22 @@ def png_header(data: bytes) -> tuple[int, int, int]:
 
 
 @pytest.mark.parametrize(
-    ("name", "size"),
+    ("name", "size", "colour_type"),
     [
-        ("memocypher.png", 1254),
-        ("memocypher-256.png", 256),
-        ("memocypher-32.png", 32),
-        ("memocypher-16.png", 16),
-        ("memocypher-glyph-20.png", 20),
-        ("memocypher-glyph-24.png", 24),
-        ("memocypher-glyph-32.png", 32),
+        ("memocypher.png", 1254, RGB),
+        ("memocypher-256.png", 256, RGBA),
+        ("memocypher-32.png", 32, RGBA),
+        ("memocypher-16.png", 16, RGBA),
+        ("memocypher-glyph-20.png", 20, RGBA),
+        ("memocypher-glyph-24.png", 24, RGBA),
+        ("memocypher-glyph-32.png", 32, RGBA),
     ],
 )
-def test_packaged_icons_resolve_regardless_of_cwd(name, size, tmp_path, monkeypatch):
+def test_packaged_icons_resolve_regardless_of_cwd(name, size, colour_type, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    width, height, colour_type = png_header((ASSETS / name).read_bytes())
+    width, height, found = png_header((ASSETS / name).read_bytes())
     assert (width, height) == (size, size)
-    assert colour_type == RGBA
+    assert found == colour_type
 
 
 tk = pytest.importorskip("tkinter")
