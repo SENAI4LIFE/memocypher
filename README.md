@@ -17,11 +17,15 @@ key id.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.10 or newer on Windows, macOS or Linux
 - [`cryptography`](https://cryptography.io/) (installed automatically)
-- Tkinter for the GUI. It ships with the official Python installers on Windows
-  and macOS. On Debian/Ubuntu: `sudo apt install python3-tk`. The command-line
-  interface works without Tkinter.
+- For the GUI only: Tkinter and a graphical session. Tkinter ships with the
+  official Python installers on Windows and macOS. On Linux it is a separate
+  system package: `sudo apt install python3-tk` on Debian/Ubuntu, or your
+  distribution's Tkinter package for Python 3 elsewhere. Check with
+  `python3 -c "import tkinter"`.
+- The command-line interface needs neither Tkinter nor a display, so it works
+  on headless systems.
 - Optional: `tkinterdnd2` for drag-and-drop into the window.
 
 ## Installation
@@ -35,6 +39,23 @@ python -m pip install .
 
 This provides two entry points: `memocypher` (the CLI, and the GUI when run
 with no arguments) and `memocypher-gui` (the GUI without a console window).
+
+On Linux the interpreter is usually called `python3`, and Debian/Ubuntu and
+other distributions do not allow `pip install` into the system Python, so use
+pipx or a virtual environment. Tested on Ubuntu 24.04:
+
+```
+sudo apt install python3-venv python3-tk    # python3-tk only for the GUI
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+```
+
+Inside the activated environment `python` and `pip` refer to it, so the other
+commands in this README apply unchanged. With pipx (`sudo apt install pipx`,
+then `pipx install .`) the entry points land in `~/.local/bin`; run
+`pipx ensurepath` if they are not found. pipx builds on the system
+interpreter, so the GUI still needs `python3-tk`.
 
 Drag-and-drop is an optional extra:
 
@@ -57,6 +78,11 @@ python -m memocypher --help     # CLI
 ```
 memocypher
 ```
+
+`memocypher-gui`, `memocypher gui` and `python -m memocypher` open the same
+window. On Linux it needs an X11 display (Wayland desktops provide one through
+XWayland); without a display the command prints an error and exits with status
+1. *Reveal in file manager* uses `xdg-open` on Linux.
 
 1. Set the **workspace** to the folder you want to work in. Its contents are
    listed and grouped as folders, plaintext, encrypted and key files.
@@ -205,6 +231,12 @@ python -m pip install -e ".[dev]"
 python -m pytest
 ruff check .
 ```
+
+The same commands apply on every platform; on Linux run them inside the
+virtual environment from [Installation](#installation). CI runs the suite on
+Ubuntu, Windows and macOS with Python 3.10 to 3.13. The GUI tests build a real
+window and skip themselves when no display is available, so the rest of the
+suite runs headless.
 
 The suite covers the container format (round trips, tamper / truncation /
 reorder detection, wrong credentials), archive packing, key files and matching,
