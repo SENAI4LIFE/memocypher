@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="memocypher/gui/assets/memocypher-256.png" width="96" alt="memocypher icon">
+</p>
+
 # memocypher
 
 Authenticated file encryption with a desktop GUI and a command-line interface.
@@ -167,7 +171,7 @@ memocypher/
   batch.py      Plan jobs with collisions resolved up front, then run them with
                 progress events and cancellation. Threaded wrapper for the GUI.
   cli.py        argparse command-line interface.
-  gui/          Tkinter application: theme tokens, widgets, dialogs, drag-drop.
+  gui/          Tkinter application: theme tokens, widgets, dialogs, drag-drop, icons.
 ```
 
 ### Container format (`memocypher/1`)

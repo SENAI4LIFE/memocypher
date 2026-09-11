@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -191,3 +193,13 @@ def test_decrypt_wrong_keyfile_exit_1(tmp_path, capsys):
     rc = cli.main(["decrypt", str(container), "--keyfile", str(bad), "-o", str(tmp_path / "d")])
     assert rc == 1
     assert not (tmp_path / "d" / "x.txt").exists()
+
+
+def test_cli_import_leaves_tk_and_gui_untouched():
+    probe = (
+        "import sys, memocypher.cli;"
+        "loaded = [m for m in sys.modules if m == 'tkinter' or m.startswith('memocypher.gui')];"
+        "sys.exit(repr(loaded) if loaded else 0)"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

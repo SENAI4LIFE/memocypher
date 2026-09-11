@@ -14,8 +14,10 @@ import time
 import pytest
 
 tk = pytest.importorskip("tkinter")
+ttk = pytest.importorskip("tkinter.ttk")
 
 from memocypher import keys  # noqa: E402
+from memocypher.gui import icons  # noqa: E402
 from memocypher.gui import theme as theme_mod  # noqa: E402
 
 
@@ -66,6 +68,30 @@ def test_app_builds_and_toggles_theme(app):
     assert app.mode == "light"
     app.toggle_mode()
     assert app.mode == "dark"
+
+
+def _labels_showing(widget, image) -> list:
+    found = []
+    for child in widget.winfo_children():
+        if isinstance(child, ttk.Label) and str(image) in child.cget("image"):
+            found.append(child)
+        found.extend(_labels_showing(child, image))
+    return found
+
+
+def test_window_icon_and_brand_glyph(app):
+    assert [p.width() for p in app.window_icons] == list(icons.WINDOW_SIZES)
+    assert app.brand_glyph is not None
+
+    (glyph_label,) = _labels_showing(app, app.brand_glyph)
+    siblings = glyph_label.master.pack_slaves()
+    title = siblings[siblings.index(glyph_label) + 1]
+    assert title.cget("text") == "memocypher"
+    assert str(title.cget("style")) == "H1.TLabel"
+
+    app.toggle_mode()
+    assert _labels_showing(app, app.brand_glyph) == [glyph_label]
+    assert app.brand_glyph.width() in icons.GLYPH_SIZES
 
 
 def test_gui_encrypt_then_decrypt_roundtrip(app, tmp_path):

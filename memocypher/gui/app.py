@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import sys
 import tkinter as tk
@@ -22,7 +23,7 @@ from ..errors import KeyFileError, MemocypherError
 from ..fsops import CollisionPolicy, is_container_name
 from ..keys import KeyStore, load_key_bytes, load_legacy_fernet_key, read_key_ref
 from ..scanner import FileEntry, Workspace
-from . import dialogs, dnd
+from . import dialogs, dnd, icons
 from .theme import LG, MD, SM, XS, make_theme
 from .widgets import Card, SegmentedControl, Toast
 
@@ -53,6 +54,10 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
         self.mode = "dark"
         self.theme = make_theme(self, self.mode)
         self.theme.apply(self)
+        self.window_icons = icons.window_icons(self)
+        if self.window_icons:
+            with contextlib.suppress(tk.TclError):
+                self.iconphoto(True, *self.window_icons)
 
         self.workspace_dir: Path = Path.cwd()
         self.workspace: Workspace | None = None
@@ -112,6 +117,9 @@ class MemocypherApp(_BaseRoot):  # type: ignore[misc,valid-type]
     def _build_toolbar(self) -> None:
         bar = ttk.Frame(self, padding=(LG, MD, LG, SM))
         bar.pack(fill="x")
+        self.brand_glyph = icons.brand_glyph(self, self.theme.h1)
+        if self.brand_glyph is not None:
+            ttk.Label(bar, image=self.brand_glyph).pack(side="left", padx=(0, SM))
         ttk.Label(bar, text="memocypher", style="H1.TLabel").pack(side="left")
 
         right = ttk.Frame(bar)
